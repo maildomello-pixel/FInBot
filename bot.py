@@ -200,6 +200,56 @@ def call_gemini_question(text):
     except Exception as e:
         return f"Erro de conexão: {str(e)}"
 
+def update_database_schema():
+    """Atualiza o schema do banco para suportar datas personalizadas"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Adiciona coluna de data personalizada se não existir
+        cursor.execute("ALTER TABLE gastos ADD COLUMN data_transacao DATE")
+        print("✅ Schema atualizado: coluna data_transacao adicionada")
+    except sqlite3.OperationalError:
+        print("ℹ️ Coluna data_transacao já existe")
+    
+    conn.commit()
+    conn.close()
+
+def parse_date(date_str):
+    """Converte string de data para objeto date, suporta vários formatos"""
+    if not date_str:
+        return datetime.now().date()
+    
+    # Remove espaços extras
+    date_str = date_str.strip()
+    
+    # Tenta vários formatos
+    formats = [
+        '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y',
+        '%d/%m', '%d-%m', '%d.%m'  # Assume ano atual
+    ]
+    
+    for fmt in formats:
+        try:
+            parsed_date = datetime.strptime(date_str, fmt).date()
+            # Se não tem ano, assume ano atual
+            if fmt in ['%d/%m', '%d-%m', '%d.%m']:
+                parsed_date = parsed_date.replace(year=datetime.now().year)
+            return parsed_date
+        except ValueError:
+            continue
+    
+    # Tenta com dateparser como fallback
+    try:
+        parsed = dateparser.parse(date_str, languages=['pt'])
+        if parsed:
+            return parsed.date()
+    except:
+        pass
+    
+    return datetime.now().date()        
+
 # ====================== INICIALIZAÇÃO DO BANCO ======================
 
 def init_database():
@@ -366,27 +416,58 @@ async def addreceita(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def addreceita_parceiro(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /addreceita_parceiro - Registra receita do parceiro(a)"""
+async def addgasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /addgasto - Registra um gasto com seleção de categoria e data opcional"""
     try:
+        if not context.args:
+            raise ValueError("Nenhum argumento fornecido")
+            
         valor = float(context.args[0])
         descricao = " ".join(context.args[1:]) if len(context.args) > 1 else "Sem descrição"
-    except (IndexError, ValueError):
+        
+        # Verifica se o último argumento é uma data
+        data_str = None
+        if len(context.args) >= 2:
+            ultimo_arg = context.args[-1]
+            # Tenta parsear como data
+            data_test = parse_date(ultimo_arg)
+            if data_test != datetime.now().date():
+                # É uma data válida diferente de hoje
+                data_str = ultimo_arg
+                # Remove a data da descrição
+                descricao_parts = context.args[1:-1]
+                descricao = " ".join(descricao_parts) if descricao_parts else "Sem descrição"
+        
+        data_final = parse_date(data_str) if data_str else datetime.now().date()
+        
+    except (IndexError, ValueError) as e:
         await update.message.reply_text(
-            "❗ Uso correto: /addreceita_parceiro <valor> <descrição>\n"
-            "Ex: /addreceita_parceiro 1500 Salário",
+            "❗ Uso correto: /addgasto <valor> <descrição> [data]\n\n"
+            "📝 Exemplos:\n"
+            "• /addgasto 50 Supermercado (data atual)\n"
+            "• /addgasto 50 Supermercado 25/09\n"
+            "• /addgasto 50 Supermercado 25/09/2024\n"
+            "• /addgasto 50 Supermercado ontem\n\n"
+            "📅 Formatos de data:\n"
+            "• 25/09/2024\n• 25/09\n• 25-09\n• ontem\n• semana passada",
             parse_mode="Markdown"
         )
         return
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO receitas_parceiro (descricao, valor) VALUES (?, ?)", (descricao, valor))
-    conn.commit()
-    conn.close()
-
+    
+    # Cria botões interativos para seleção de categoria
+    keyboard = [
+        [InlineKeyboardButton("💳 Débito", callback_data=f"débito|{valor}|{descricao}|{data_final.strftime('%Y-%m-%d')}")],
+        [InlineKeyboardButton("💎 Crédito", callback_data=f"crédito|{valor}|{descricao}|{data_final.strftime('%Y-%m-%d')}")],
+        [InlineKeyboardButton("🍽️ Vale-Alimentação", callback_data=f"alimentação|{valor}|{descricao}|{data_final.strftime('%Y-%m-%d')}")],
+        [InlineKeyboardButton("📱 Pix", callback_data=f"pix|{valor}|{descricao}|{data_final.strftime('%Y-%m-%d')}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
-        f"✅ Receita da parceira registrada!\n💰 {fmt(valor)} - {descricao}",
+        f"🛒 Selecione a categoria para:\n"
+        f"💰 {fmt(valor)} - {descricao}\n"
+        f"📅 Data: {data_final.strftime('%d/%m/%Y')}",
+        reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
@@ -422,29 +503,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler para botões interativos - Processa a seleção de categoria do gasto"""
     query = update.callback_query
     await query.answer()
-
-    # Extrai dados do callback
-    categoria, valor, descricao = query.data.split("|", 2)
-    valor = float(valor)
-
+    
+    # Extrai dados do callback: categoria|valor|descricao|data
+    data_parts = query.data.split("|")
+    categoria = data_parts[0]
+    valor = float(data_parts[1])
+    descricao = data_parts[2]
+    data_str = data_parts[3] if len(data_parts) > 3 else datetime.now().strftime('%Y-%m-%d')
+    
+    # Converte string de data para objeto date
+    data_transacao = datetime.strptime(data_str, '%Y-%m-%d').date()
+    
     # Salva no banco de dados
     conn = get_db_connection()
     cursor = conn.cursor()
-
+    
     if categoria == "crédito":
         # Se for crédito, adiciona também à fatura do cartão
         cursor.execute(
             "INSERT INTO fatura_cartao (descricao, valor) VALUES (?, ?)",
             (descricao, valor)
         )
-
+    
+    # Insere com data personalizada
     cursor.execute(
-        "INSERT INTO gastos (valor, descricao, categoria) VALUES (?, ?, ?)",
-        (valor, descricao, categoria)
+        "INSERT INTO gastos (valor, descricao, categoria, data_transacao) VALUES (?, ?, ?, ?)",
+        (valor, descricao, categoria, data_str)
     )
     conn.commit()
     conn.close()
-
+    
     # Emojis por categoria
     emoji_map = {
         "débito": "💳",
@@ -452,35 +540,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "alimentação": "🍽️",
         "pix": "📱"
     }
-
+    
     await query.edit_message_text(
         f"✅ Gasto registrado!\n"
         f"{emoji_map.get(categoria, '💰')} {fmt(valor)} - {descricao}\n"
-        f"Categoria: {categoria.capitalize()}",
-        parse_mode="Markdown"
-    )
-
-async def fixo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /fixo - Registra uma despesa fixa mensal"""
-    try:
-        valor = float(context.args[0])
-        descricao = " ".join(context.args[1:]) if len(context.args) > 1 else "Sem descrição"
-    except (IndexError, ValueError):
-        await update.message.reply_text(
-            "❗ Uso correto: /fixo <valor> <descrição>\n"
-            "Ex: /fixo 1200 Aluguel",
-            parse_mode="Markdown"
-        )
-        return
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO fixos (descricao, valor) VALUES (?, ?)", (descricao, valor))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text(
-        f"✅ Despesa fixa registrada!\n🏠 {fmt(valor)} - {descricao}",
+        f"📅 Data: {data_transacao.strftime('%d/%m/%Y')}\n"
+        f"🏷️ Categoria: {categoria.capitalize()}",
         parse_mode="Markdown"
     )
 
@@ -925,6 +990,9 @@ def main():
     """Função principal que inicia o bot"""
     # Inicializa banco de dados
     init_database()
+    update_database_schema()  # <-- ADICIONE ESTA LINHA para atualizar o schema
+    
+    # ... o resto do seu código main permanece IGUAL
 
     # Verifica token do Telegram
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -963,4 +1031,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
