@@ -645,7 +645,7 @@ async def fatura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def mtp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /mtp - Aplica o Método Traz Paz para planejamento financeiro"""
+    """Comando /mtp - Aplicar o Método Traz Paz para planejamento financeiro"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -872,6 +872,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     text = update.message.text
 
+    # PRIMEIRO: Verifica se há um gasto pendente aguardando data
+    if 'pending_gasto' in context.user_data and 'categoria' in context.user_data['pending_gasto']:
+        await handle_date_response(update, context)
+        return
+
     # PRIMEIRO: Verifica se é vale-alimentação analisando o texto original
     texto_sem_acentos = remover_acentos(text.lower())
     palavras_vale = ['vale', 'alimentacao', 'va', 'vr', 'refeicao', 'ticket', 'alimentação']
@@ -1063,12 +1068,6 @@ async def handle_date_response(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode="Markdown"
     )
 
-# ====================== FILTROS PARA HANDLERS ======================
-
-def is_date_response(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Verifica se a mensagem é uma resposta de data para um gasto pendente"""
-    return 'pending_gasto' in context.user_data and 'categoria' in context.user_data['pending_gasto']
-
 # ====================== MAIN ======================
 
 def main():
@@ -1104,10 +1103,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^(débito|crédito|alimentação|pix)\\|"))
     app.add_handler(CallbackQueryHandler(reset_button_handler, pattern="^(reset_confirm|reset_cancel)$"))
 
-    # Handler para respostas de data (DEVE vir antes do handler de linguagem natural)
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r".*") & filters.Lambda(is_date_response), handle_date_response))
-
-    # Handler para mensagens em linguagem natural (deve ser o último)
+    # Handler único para todas as mensagens de texto
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Inicia o bot
