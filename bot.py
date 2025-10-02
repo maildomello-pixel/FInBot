@@ -735,7 +735,7 @@ async def reset_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     """Handler para confirmação do reset"""
     query = update.callback_query
     await query.answer()
-if query.data == "reset_confirm":
+    if query.data == "reset_confirm":
         conn = get_db_connection()
         cursor = conn.cursor()
 
@@ -1003,3 +1003,4 @@ def main():
 if __name__ == "__main__":
     main()
   
+
