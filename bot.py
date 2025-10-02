@@ -448,7 +448,8 @@ async def addgasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Armazena temporariamente os dados do gasto para usar depois na seleção da data
     context.user_data['pending_gasto'] = {
         'valor': valor,
-        'descricao': descricao
+        'descricao': descricao,
+        'waiting_for_category': True
     }
     
     # Cria botões interativos para seleção de categoria
@@ -482,7 +483,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['pending_gasto'] = {
         'valor': valor,
         'descricao': descricao,
-        'categoria': categoria
+        'categoria': categoria,
+        'waiting_for_date': True
     }
     
     # Emojis por categoria
@@ -645,7 +647,7 @@ async def fatura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def mtp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /mtp - Aplicar o Método Traz Paz para planejamento financeiro"""
+    """Comando /mtp - Aplica o Método Traz Paz para planejamento financeiro"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -873,7 +875,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     # PRIMEIRO: Verifica se há um gasto pendente aguardando data
-    if 'pending_gasto' in context.user_data and 'categoria' in context.user_data['pending_gasto']:
+    if 'pending_gasto' in context.user_data and context.user_data['pending_gasto'].get('waiting_for_date'):
         await handle_date_response(update, context)
         return
 
@@ -946,7 +948,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['pending_gasto'] = {
             'valor': float(amount),
             'descricao': description,
-            'categoria': 'alimentação'
+            'categoria': 'alimentação',
+            'waiting_for_date': True
         }
         
         await update.message.reply_text(
@@ -990,7 +993,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Armazena temporariamente os dados do gasto
         context.user_data['pending_gasto'] = {
             'valor': float(amount),
-            'descricao': description
+            'descricao': description,
+            'waiting_for_category': True
         }
         
         # Mostra botões de categoria
@@ -1014,7 +1018,7 @@ async def handle_date_response(update: Update, context: ContextTypes.DEFAULT_TYP
     Handler para respostas de data após seleção de categoria
     """
     # Verifica se há um gasto pendente aguardando data
-    if 'pending_gasto' not in context.user_data:
+    if 'pending_gasto' not in context.user_data or not context.user_data['pending_gasto'].get('waiting_for_date'):
         await update.message.reply_text(
             "🤔 Não tenho um gasto pendente. Por favor, registre um gasto primeiro.",
             parse_mode="Markdown"
