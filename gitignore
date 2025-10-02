@@ -1,0 +1,17 @@
+*.db
+*.pyc
+__pycache__/
+*.log
+*.pdf
+*.xlsx
+*.xls
+*.csv
+.env
+venv/
+env/
+.venv/
+*.swp
+*.swo
+*~
+.DS_Store
+.pythonlibs/
