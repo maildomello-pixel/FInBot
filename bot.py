@@ -74,6 +74,36 @@ except locale.Error:
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+def parse_valor(valor_str):
+    """Aceita 150,99 ou 150.99 ou 15099"""
+    valor_str = str(valor_str).replace(' ', '').replace(',', '.')
+    
+    if valor_str.replace('.', '').isdigit():
+        if '.' not in valor_str:
+            if len(valor_str) <= 2:
+                valor_str = '0.' + valor_str.zfill(2)
+            else:
+                valor_str = valor_str[:-2] + '.' + valor_str[-2:]
+        
+        try:
+            return float(valor_str)
+        except ValueError:
+            return None
+    return None
+
+def parse_data_flexivel(data_str):
+    """Aceita praticamente qualquer formato de data em português"""
+    settings = {
+        'DATE_ORDER': 'DMY',
+        'LANGUAGES': ['pt', 'pt-BR'],
+        'PREFER_DAY_OF_MONTH': 'first',
+        'PREFER_DATES_FROM': 'past',
+        'RELATIVE_BASE': datetime.now(),
+        'TIMEZONE': 'America/Sao_Paulo'
+    }
+    
+    data = dateparser.parse(data_str, settings=settings)
+    return data.strftime('%Y-%m-%d') if data else None
 def fmt(valor):
     """Formata um número em moeda brasileira (R$)."""
     try:
@@ -228,7 +258,7 @@ def call_gemini_question(text):
     Responda de forma clara e direta, sem incluir JSON ou estruturas de dados.
     """
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -240,13 +270,40 @@ def call_gemini_question(text):
 
     try:
         response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
+        
         if response.status_code == 200:
             data = response.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            
+            if "candidates" in data and len(data["candidates"]) > 0:
+                candidate = data["candidates"][0]
+                if "content" in candidate and "parts" in candidate["content"]:
+                    parts = candidate["content"]["parts"]
+                    if len(parts) > 0 and "text" in parts[0]:
+                        return parts[0]["text"]
+            
+            if "error" in data:
+                error_msg = data["error"].get("message", "Erro desconhecido")
+                return f"❌ Erro da API Gemini: {error_msg}"
+            
+            return "❌ A IA não conseguiu gerar uma resposta. Tente novamente."
+            
+        elif response.status_code == 400:
+            return "❌ Requisição inválida. Verifique a API key do Gemini."
+        elif response.status_code == 403:
+            return "❌ API key do Gemini inválida ou sem permissão."
+        elif response.status_code == 429:
+            return "❌ Limite de requisições excedido. Tente novamente em alguns minutos."
+        elif response.status_code == 500:
+            return "❌ Erro no servidor do Gemini. Tente novamente mais tarde."
         else:
-            return f"Erro ao consultar Gemini: {response.text}"
+            return f"❌ Erro ao consultar Gemini (código {response.status_code})"
+            
+    except httpx.TimeoutException:
+        return "❌ Timeout: A IA demorou muito para responder. Tente novamente."
+    except httpx.NetworkError:
+        return "❌ Erro de rede: Verifique sua conexão com a internet."
     except Exception as e:
-        return f"Erro de conexão: {str(e)}"
+        return f"❌ Erro inesperado: {str(e)}"
 
 def init_database():
     """Inicializa o banco de dados criando as tabelas necessárias"""
@@ -394,21 +451,21 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "💵 RECEITAS (ENTRADAS)\n"
-        "/addreceita <valor> <descrição>\n"
-        "/addreceita_parceiro <valor> <descrição>\n\n"
+        "/addreceita [valor] [descrição]\n"
+        "/addreceita_parceiro [valor] [descrição]\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "🛒 DESPESAS (SAÍDAS)\n"
-        "/addgasto <valor> <descrição>\n"
-        "/fixo <valor> <descrição>\n"
-        "/vale <valor>\n\n"
+        "/addgasto [valor] [descrição]\n"
+        "/fixo [valor] [descrição]\n"
+        "/vale [valor]\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "🎯 METAS DE ECONOMIA\n"
         "/metas - Ver todas as metas\n"
-        "/addmeta <valor> <nome>\n"
+        "/addmeta [valor] [nome]\n"
         "   Ex: /addmeta 5000 Viagem para praia\n"
-        "/progresso_meta <id> <valor>\n"
+        "/progresso_meta [id] [valor]\n"
         "   Ex: /progresso_meta 1 500\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -416,9 +473,9 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/grafico - Gráfico de pizza das despesas\n"
         "/grafico_mensal - Evolução mensal\n"
         "/relatorio - Relatório do mês atual\n"
-        "/relatorio_mes <mês> <ano> - Relatório de mês específico\n"
+        "/relatorio_mes [mês] [ano] - Relatório de mês específico\n"
         "   Ex: /relatorio_mes 9 2024\n"
-        "/saldo_mes <mês> <ano> - Saldo de mês específico\n"
+        "/saldo_mes [mês] [ano] - Saldo de mês específico\n"
         "/comparar_meses - Comparar mês atual com anterior\n"
         "/historico_meses - Últimos 6 meses\n"
         "/relatorio_detalhado - Relatório PDF\n"
@@ -427,25 +484,25 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "🔔 LEMBRETES\n"
         "/lembretes - Ver todos os lembretes\n"
-        "/addlembrete <dia> <descrição>\n"
+        "/addlembrete [dia] [descrição]\n"
         "   Ex: /addlembrete 10 Pagar conta de luz\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "🏷️ CATEGORIAS\n"
         "/categorias - Ver categorias\n"
-        "/addcategoria <nome>\n"
-        "/removecategoria <nome>\n\n"
+        "/addcategoria [nome]\n"
+        "/removecategoria [nome]\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "💰 ORÇAMENTO\n"
-        "/orcamento <valor> - Definir orçamento mensal\n"
-        "/orcamento_categoria <categoria> <valor>\n"
+        "/orcamento [valor] - Definir orçamento mensal\n"
+        "/orcamento_categoria [categoria] [valor]\n"
         "   Ex: /orcamento_categoria Alimentação 500\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "🔄 PAGAMENTOS RECORRENTES\n"
         "/recorrentes - Ver todos recorrentes\n"
-        "/addrecorrente <valor> <dia> <descrição>\n"
+        "/addrecorrente [valor] [dia] [descrição]\n"
         "   Ex: /addrecorrente 100 15 Netflix\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -458,7 +515,7 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 INTELIGÊNCIA ARTIFICIAL\n"
-        "/ia <pergunta> - Fazer pergunta à IA\n\n"
+        "/ia [pergunta] - Fazer pergunta à IA\n\n"
 
         "💬 LINGUAGEM NATURAL\n"
         "Você pode simplesmente me dizer:\n"
@@ -469,7 +526,7 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗑️ GERENCIAMENTO\n"
         "/reset - Apagar todos os dados"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg)
 
 async def addreceita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /addreceita - Registra uma receita (entrada) pessoal"""
